@@ -146,7 +146,7 @@ if user_query:
                 {"role": "system", "content": "You are a helpful EV assistant."},
                 {"role": "user", "content": prompt}
             ],
-            model="llama3-8b-8192", 
+            model="llama-3.1-8b-instant", 
         )
         
         response_text = chat_completion.choices[0].message.content
@@ -157,3 +157,4 @@ if user_query:
         
     except Exception as e:
         st.error(f"Groq API Error: {e}")
+
