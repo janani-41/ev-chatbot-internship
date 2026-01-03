@@ -4,12 +4,13 @@ import google.generativeai as genai
 import chromadb
 from chromadb.utils import embedding_functions
 import os
+import time  # <--- Added for the delay
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="EV Charger Finder", page_icon="⚡", layout="wide")
 st.title("⚡ EV Charging Station Finder")
 st.markdown("""
-**Status:** Live | **Data Source:** Sample of User Dataset
+**Status:** Live | **Data:** Top 20 Stations (Safe Mode)
 *Ask about location, connector types (CCS, Tesla), or charging speed.*
 """)
 
@@ -22,14 +23,26 @@ except:
 
 genai.configure(api_key=GOOGLE_API_KEY)
 
-# --- 2. LOAD & INDEX DATASET (SAFE MODE) ---
+# --- 2. SLOW LOAD & INDEX (The Fix) ---
 @st.cache_resource
-def load_db():
+def load_db_safely():
     try:
         # Initialize Vector DB
         chroma_client = chromadb.Client()
         embedding_func = embedding_functions.GoogleGenerativeAiEmbeddingFunction(api_key=GOOGLE_API_KEY)
-        collection = chroma_client.create_collection(name="ev_stations_safe", embedding_function=embedding_func)
+        
+        # Use a new name to avoid conflicts with old broken collections
+        collection_name = "ev_stations_turtle_v1" 
+        
+        # Check if it already exists (to avoid re-loading if not needed)
+        try:
+            collection = chroma_client.get_collection(name=collection_name, embedding_function=embedding_func)
+            print("✅ Collection found. Skipping re-indexing.")
+            return collection
+        except:
+            pass # Collection doesn't exist, create it below
+
+        collection = chroma_client.create_collection(name=collection_name, embedding_function=embedding_func)
 
         # CHECK FOR FILE
         file_name = "detailed_ev_charging_stations.csv"
@@ -40,17 +53,17 @@ def load_db():
         # READ CSV
         df = pd.read_csv(file_name)
         
-        # --- CRITICAL FIX FOR 429 ERROR ---
-        # We only take the first 50 rows to respect Free Tier limits.
-        # This is enough for a demo.
-        df = df.head(50) 
-        # ----------------------------------
-
-        # PREPARE TEXT FOR AI
-        documents = []
-        ids = []
+        # LIMIT TO 20 ROWS (Strict Safety)
+        df = df.head(20) 
+        
+        # PROGRESS BAR (So you know it's working)
+        progress_text = "Indexing stations slowly to avoid Rate Limits... Please wait."
+        my_bar = st.progress(0, text=progress_text)
+        
+        total_rows = len(df)
         
         for idx, row in df.iterrows():
+            # Construct Text
             info = (
                 f"Station at {row['Address']}. "
                 f"Operator: {row['Station Operator']}. "
@@ -60,19 +73,26 @@ def load_db():
                 f"Availability: {row['Availability']}. "
                 f"Rating: {row['Reviews (Rating)']}/5."
             )
-            documents.append(info)
-            ids.append(str(idx))
             
-        # Add to Database
-        collection.add(documents=documents, ids=ids)
-        print(f"✅ Indexed {len(documents)} stations.")
+            # ADD ONE BY ONE
+            collection.add(documents=[info], ids=[str(idx)])
+            
+            # UPDATE PROGRESS
+            percent = int(((idx + 1) / total_rows) * 100)
+            my_bar.progress(percent, text=f"Indexed {idx+1}/{total_rows} stations...")
+            
+            # PAUSE FOR 4 SECONDS (The Rate Limit Fix)
+            time.sleep(4)
+            
+        my_bar.empty() # Clear bar when done
+        st.success(f"✅ Successfully indexed {total_rows} stations!")
         return collection
 
     except Exception as e:
         st.error(f"Error loading database: {e}")
         return None
 
-collection = load_db()
+collection = load_db_safely()
 
 # --- 3. CHAT INTERFACE ---
 if "messages" not in st.session_state:
